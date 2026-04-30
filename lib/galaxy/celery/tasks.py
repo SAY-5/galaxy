@@ -82,10 +82,7 @@ from galaxy.security.vault import (
     Vault,
 )
 from galaxy.short_term_storage import ShortTermStorageMonitor
-from galaxy.structured_app import (
-    MinimalManagerApp,
-    StructuredApp,
-)
+from galaxy.structured_app import MinimalManagerApp
 from galaxy.tools import create_tool_from_representation
 from galaxy.tools.data_fetch import do_fetch
 from galaxy.util import galaxy_directory
@@ -670,7 +667,7 @@ def dispatch_pending_notifications(notification_manager: NotificationManager):
 
 
 @galaxy_task(action="emit queue and SSE observability metrics")
-def emit_queue_metrics_task(app: StructuredApp):
+def emit_queue_metrics_task(app: MinimalManagerApp):
     """Sample control-queue depth, SSE connection count, and worker rows → statsd.
 
     Resolves the narrow collaborators ``emit_queue_metrics`` needs from the app

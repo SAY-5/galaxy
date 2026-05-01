@@ -1292,6 +1292,31 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/events/history-subscriptions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Subscribe to history_update SSE events for histories you don't own.
+         * @description Asks every webapp worker to start routing ``history_update`` events
+         *     for these histories to the requesting user/session, in addition to the
+         *     default owner-routing. Idempotent: re-subscribing to the same id is a
+         *     no-op. Clients re-send the full set after each ``EventSource.onopen``
+         *     so reconnects don't drop subscriptions.
+         */
+        post: operations["subscribe_history_viewer_api_events_history_subscriptions_post"];
+        /** Cancel viewer subscriptions for these histories. */
+        delete: operations["unsubscribe_history_viewer_api_events_history_subscriptions_delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/events/stream": {
         parameters: {
             query?: never;
@@ -15432,6 +15457,14 @@ export interface components {
              * @description The relative URL to access this item.
              */
             url: string;
+        };
+        /**
+         * HistoryViewerSubscriptionPayload
+         * @description REST payload for ``/api/events/history-subscriptions`` endpoints.
+         */
+        HistoryViewerSubscriptionPayload: {
+            /** History Ids */
+            history_ids: string[];
         };
         /**
          * Hyperlink
@@ -33457,6 +33490,92 @@ export interface operations {
                         [key: string]: unknown;
                     };
                 };
+            };
+            /** @description Request Error */
+            "4XX": {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MessageExceptionModel"];
+                };
+            };
+            /** @description Server Error */
+            "5XX": {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MessageExceptionModel"];
+                };
+            };
+        };
+    };
+    subscribe_history_viewer_api_events_history_subscriptions_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The user ID that will be used to effectively make this API call. Only admins and designated users can make API calls on behalf of other users. */
+                "run-as"?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["HistoryViewerSubscriptionPayload"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Request Error */
+            "4XX": {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MessageExceptionModel"];
+                };
+            };
+            /** @description Server Error */
+            "5XX": {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MessageExceptionModel"];
+                };
+            };
+        };
+    };
+    unsubscribe_history_viewer_api_events_history_subscriptions_delete: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The user ID that will be used to effectively make this API call. Only admins and designated users can make API calls on behalf of other users. */
+                "run-as"?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["HistoryViewerSubscriptionPayload"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
             /** @description Request Error */
             "4XX": {

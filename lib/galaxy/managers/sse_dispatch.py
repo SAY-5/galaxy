@@ -150,6 +150,39 @@ class SSEEventDispatcher:
             kwargs["session_updates"] = session_updates
         self._send("history_update", kwargs)
 
+    def subscribe_history_viewer(
+        self,
+        history_id: str,
+        user_id: Optional[int] = None,
+        session_id: Optional[int] = None,
+    ) -> None:
+        """Broadcast a viewer-subscription record so every webapp worker can
+        push history_update events to a user/session watching a history they
+        don't own. The dispatch is fire-and-forget — workers apply the
+        record locally on receipt. Multi-worker deployments rely on this to
+        keep subscriptions consistent regardless of which worker fields the
+        REST call.
+        """
+        kwargs: dict[str, Any] = {"history_id": history_id}
+        if user_id is not None:
+            kwargs["user_id"] = user_id
+        if session_id is not None:
+            kwargs["session_id"] = session_id
+        self._send("subscribe_history_viewer", kwargs)
+
+    def unsubscribe_history_viewer(
+        self,
+        history_id: str,
+        user_id: Optional[int] = None,
+        session_id: Optional[int] = None,
+    ) -> None:
+        kwargs: dict[str, Any] = {"history_id": history_id}
+        if user_id is not None:
+            kwargs["user_id"] = user_id
+        if session_id is not None:
+            kwargs["session_id"] = session_id
+        self._send("unsubscribe_history_viewer", kwargs)
+
     def entry_point_update(self, user_id: int, event_id: Optional[str] = None) -> None:
         """Fan out a wake-up ``entry_point_update`` event for one user.
 

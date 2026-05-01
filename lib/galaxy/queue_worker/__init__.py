@@ -88,6 +88,20 @@ class EntryPointUpdatePayload(TypedDict, total=False):
     event_id: Optional[str]
 
 
+class HistoryViewerSubscriptionPayload(TypedDict, total=False):
+    """Wire contract for the (un)subscribe_history_viewer control-task kwargs.
+
+    Either ``user_id`` or ``session_id`` is set, never both. ``history_id`` is
+    the encoded string the client used in its REST call — the dispatch path
+    never needs to decode it because viewer routing only fans out to live
+    queues, not to anything that touches the database.
+    """
+
+    history_id: str
+    user_id: int
+    session_id: int
+
+
 def send_local_control_task(
     app: "StructuredApp",
     task: str,
@@ -431,23 +445,79 @@ def history_update(app: "MinimalManagerApp", **kwargs) -> None:
     stays free of presentation/security concerns. Handles both user-keyed
     routing (registered users) and galaxy_session-keyed routing (anonymous
     histories, which have ``user_id IS NULL``).
+
+    After owner routing, also fans out to viewer subscriptions so users
+    watching histories they don't own (multi-history view of a shared history,
+    published-history page, etc.) receive the same push. Viewer dispatch is
+    additive: the owner gets the event from ``push_to_user`` regardless of
+    whether they happen to be subscribed as a viewer too — duplicate refresh
+    is idempotent on the client and cheaper than maintaining a dedup index.
     """
     payload = cast(HistoryUpdatePayload, kwargs)
     sse_manager = app[SSEConnectionManager]
     event_id = payload.get("event_id")
     encode = app.security.encode_id
+    # Build (history_id, encoded_event) once per changed history so the viewer
+    # fan-out below doesn't redo the JSON serialization.
+    events_by_encoded_id: dict[str, SSEEvent] = {}
+
+    def event_for(history_id: int) -> SSEEvent:
+        encoded = encode(history_id)
+        cached = events_by_encoded_id.get(encoded)
+        if cached is None:
+            data = json.dumps({"history_ids": [encoded]})
+            cached = SSEEvent(event="history_update", data=data, id=event_id)
+            events_by_encoded_id[encoded] = cached
+        return cached
+
     for user_id_str, history_ids in payload.get("user_updates", {}).items():
         user_id = int(user_id_str)
         encoded_ids = [encode(hid) for hid in history_ids]
         data = json.dumps({"history_ids": encoded_ids})
         event = SSEEvent(event="history_update", data=data, id=event_id)
         sse_manager.push_to_user(user_id, event)
+        for hid in history_ids:
+            # Pre-populate the per-history cache so the viewer fan-out reuses
+            # the encoded id without re-running encode_id.
+            event_for(hid)
     for session_id_str, history_ids in payload.get("session_updates", {}).items():
         session_id = int(session_id_str)
         encoded_ids = [encode(hid) for hid in history_ids]
         data = json.dumps({"history_ids": encoded_ids})
         event = SSEEvent(event="history_update", data=data, id=event_id)
         sse_manager.push_to_session(session_id, event)
+        for hid in history_ids:
+            event_for(hid)
+    # Viewer dispatch — push a single-history event to anyone (user or session)
+    # subscribed as a viewer of that history on this worker.
+    for encoded_id, viewer_event in events_by_encoded_id.items():
+        sse_manager.push_to_history_viewers(encoded_id, viewer_event)
+
+
+def subscribe_history_viewer(app: "MinimalManagerApp", **kwargs) -> None:
+    """Apply a viewer subscription on this worker.
+
+    Fired by the producer's broadcast so each webapp process can route future
+    history_update events to viewers regardless of which worker fielded the
+    REST call.
+    """
+    payload = cast(HistoryViewerSubscriptionPayload, kwargs)
+    sse_manager = app[SSEConnectionManager]
+    history_id = payload["history_id"]
+    if "user_id" in payload:
+        sse_manager.subscribe_user_viewer(int(payload["user_id"]), history_id)
+    if "session_id" in payload:
+        sse_manager.subscribe_session_viewer(int(payload["session_id"]), history_id)
+
+
+def unsubscribe_history_viewer(app: "MinimalManagerApp", **kwargs) -> None:
+    payload = cast(HistoryViewerSubscriptionPayload, kwargs)
+    sse_manager = app[SSEConnectionManager]
+    history_id = payload["history_id"]
+    if "user_id" in payload:
+        sse_manager.unsubscribe_user_viewer(int(payload["user_id"]), history_id)
+    if "session_id" in payload:
+        sse_manager.unsubscribe_session_viewer(int(payload["session_id"]), history_id)
 
 
 def entry_point_update(app: "MinimalManagerApp", **kwargs) -> None:
@@ -483,6 +553,8 @@ control_message_to_task = {
     "notify_broadcast": notify_broadcast,
     "history_update": history_update,
     "entry_point_update": entry_point_update,
+    "subscribe_history_viewer": subscribe_history_viewer,
+    "unsubscribe_history_viewer": unsubscribe_history_viewer,
 }
 
 

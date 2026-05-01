@@ -85,6 +85,12 @@ class SSEConnectionManager:
         self._broadcast_connections: set[asyncio.Queue] = set()
         self._loop: Optional[asyncio.AbstractEventLoop] = None
         self._statsd_client = statsd_client
+        # Viewer subscriptions for non-owned histories. Each worker keeps its
+        # own copy; the producer fans out subscribe/unsubscribe via Kombu so
+        # every webapp process learns about it. Maps encoded history_id (str)
+        # to the set of user_ids / session_ids that have asked for events.
+        self._history_viewers_user: dict[str, set[int]] = defaultdict(set)
+        self._history_viewers_session: dict[str, set[int]] = defaultdict(set)
 
     def _ensure_loop(self) -> None:
         """Capture the running asyncio event loop. Must be called from async context."""
@@ -134,10 +140,16 @@ class SSEConnectionManager:
             self._connections[user_id].discard(queue)
             if not self._connections[user_id]:
                 del self._connections[user_id]
+                # Last connection for this user on this worker — drop their
+                # viewer subscriptions so the maps don't grow unbounded over
+                # long-lived processes. The client re-asserts subscriptions
+                # on every ``onopen`` so the next reconnect restores them.
+                self._purge_user_viewer_subscriptions(user_id)
         if galaxy_session_id is not None:
             self._session_connections[galaxy_session_id].discard(queue)
             if not self._session_connections[galaxy_session_id]:
                 del self._session_connections[galaxy_session_id]
+                self._purge_session_viewer_subscriptions(galaxy_session_id)
         self._broadcast_connections.discard(queue)
         log.debug(
             "SSE connection closed for user_id=%s session_id=%s (total=%d)",
@@ -166,6 +178,60 @@ class SSEConnectionManager:
         """Thread-safe. Push an event to ALL connected SSE clients."""
         for queue in list(self._broadcast_connections):
             self._safe_put(queue, event)
+
+    def push_to_history_viewers(self, history_id: str, event: SSEEvent) -> None:
+        """Thread-safe. Push an event to every user/session that has subscribed
+        to ``history_id`` as a viewer (i.e. is watching a history they don't
+        own). Owner routing remains a separate path so the common "user changes
+        their own history" case never depends on a subscribe round trip.
+        """
+        for user_id in list(self._history_viewers_user.get(history_id, ())):
+            self.push_to_user(user_id, event)
+        for session_id in list(self._history_viewers_session.get(history_id, ())):
+            self.push_to_session(session_id, event)
+
+    # -- Viewer subscription bookkeeping --
+    # These mutate per-worker state and are called from the Kombu task thread
+    # via the ``subscribe_history_viewer`` / ``unsubscribe_history_viewer``
+    # control tasks. They are not thread-safe with each other (defaultdict
+    # mutations are not atomic), but Kombu drains the control queue serially
+    # so concurrent calls into a single manager don't happen in practice.
+
+    def subscribe_user_viewer(self, user_id: int, history_id: str) -> None:
+        self._history_viewers_user[history_id].add(user_id)
+
+    def unsubscribe_user_viewer(self, user_id: int, history_id: str) -> None:
+        viewers = self._history_viewers_user.get(history_id)
+        if viewers is None:
+            return
+        viewers.discard(user_id)
+        if not viewers:
+            del self._history_viewers_user[history_id]
+
+    def subscribe_session_viewer(self, session_id: int, history_id: str) -> None:
+        self._history_viewers_session[history_id].add(session_id)
+
+    def unsubscribe_session_viewer(self, session_id: int, history_id: str) -> None:
+        viewers = self._history_viewers_session.get(history_id)
+        if viewers is None:
+            return
+        viewers.discard(session_id)
+        if not viewers:
+            del self._history_viewers_session[history_id]
+
+    def _purge_user_viewer_subscriptions(self, user_id: int) -> None:
+        """Drop every viewer subscription this user holds on this worker.
+
+        Called after their last connection on this worker closes. The map of
+        ``history_id → user_ids`` is small enough that a full scan is fine —
+        the inverse index isn't worth maintaining at this scale.
+        """
+        for history_id in list(self._history_viewers_user.keys()):
+            self.unsubscribe_user_viewer(user_id, history_id)
+
+    def _purge_session_viewer_subscriptions(self, session_id: int) -> None:
+        for history_id in list(self._history_viewers_session.keys()):
+            self.unsubscribe_session_viewer(session_id, history_id)
 
     def _safe_put(self, queue: asyncio.Queue, event: SSEEvent) -> None:
         """Cross the thread boundary safely using ``call_soon_threadsafe``."""

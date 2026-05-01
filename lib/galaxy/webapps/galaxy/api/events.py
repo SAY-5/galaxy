@@ -9,9 +9,12 @@ import logging
 from typing import Optional
 
 from fastapi import (
+    Body,
     Header,
     Request,
+    status,
 )
+from pydantic import BaseModel
 from starlette.responses import StreamingResponse
 
 from galaxy.managers.context import ProvidesUserContext
@@ -21,6 +24,13 @@ from . import (
     DependsOnTrans,
     Router,
 )
+
+
+class HistoryViewerSubscriptionPayload(BaseModel):
+    """REST payload for ``/api/events/history-subscriptions`` endpoints."""
+
+    history_ids: list[str]
+
 
 log = logging.getLogger(__name__)
 
@@ -60,3 +70,33 @@ class FastAPIEvents:
                 "X-Accel-Buffering": "no",
             },
         )
+
+    @router.post(
+        "/api/events/history-subscriptions",
+        summary="Subscribe to history_update SSE events for histories you don't own.",
+        status_code=status.HTTP_204_NO_CONTENT,
+    )
+    def subscribe_history_viewer(
+        self,
+        payload: HistoryViewerSubscriptionPayload = Body(...),
+        trans: ProvidesUserContext = DependsOnTrans,
+    ) -> None:
+        """Asks every webapp worker to start routing ``history_update`` events
+        for these histories to the requesting user/session, in addition to the
+        default owner-routing. Idempotent: re-subscribing to the same id is a
+        no-op. Clients re-send the full set after each ``EventSource.onopen``
+        so reconnects don't drop subscriptions.
+        """
+        self.service.subscribe_history_viewer(trans, payload.history_ids)
+
+    @router.delete(
+        "/api/events/history-subscriptions",
+        summary="Cancel viewer subscriptions for these histories.",
+        status_code=status.HTTP_204_NO_CONTENT,
+    )
+    def unsubscribe_history_viewer(
+        self,
+        payload: HistoryViewerSubscriptionPayload = Body(...),
+        trans: ProvidesUserContext = DependsOnTrans,
+    ) -> None:
+        self.service.unsubscribe_history_viewer(trans, payload.history_ids)

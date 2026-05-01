@@ -18,6 +18,7 @@ import { useResourceWatcher } from "@/composables/resourceWatcher";
 import { useSSE } from "@/composables/useNotificationSSE";
 import { useUserLocalStorage } from "@/composables/userLocalStorage";
 import { useConfigStore } from "@/stores/configurationStore";
+import { useHistoryItemsStore } from "@/stores/historyItemsStore";
 import {
     createAndSelectNewHistory,
     getCurrentHistoryFromServer,
@@ -408,14 +409,37 @@ export const useHistoryStore = defineStore("historyStore", () => {
         try {
             const data = JSON.parse(event.data);
             const changedHistoryIds: string[] = data.history_ids ?? [];
-            if (currentHistoryId.value && changedHistoryIds.includes(currentHistoryId.value)) {
+            if (!changedHistoryIds.length) {
+                return;
+            }
+            const currentId = currentHistoryId.value;
+            if (currentId && changedHistoryIds.includes(currentId)) {
                 // SSE is itself the signal that the history changed — force the
                 // refresh so the update_time short-circuit in watchHistoryOnce
                 // can't suppress the contents fetch.
                 const app = getGalaxyInstance();
                 refreshHistoryFromPushSuppliedApp(app).catch((err) =>
-                    console.error("Error refreshing history from SSE push:", err),
+                    console.error("Error refreshing current history from SSE push:", err),
                 );
+            }
+            // Also refresh other tracked histories (e.g. visible in the
+            // multi-history view). Skip ids not in storedHistories — there's
+            // no rendered panel for them, so refetching wastes a request.
+            const itemsStore = useHistoryItemsStore();
+            for (const id of changedHistoryIds) {
+                if (id === currentId) {
+                    continue;
+                }
+                if (!storedHistories.value[id]) {
+                    continue;
+                }
+                const filterText = storedFilterTexts.value[id] ?? "";
+                updateContentStats(id).catch((err) =>
+                    console.error(`Error updating content stats for history ${id}:`, err),
+                );
+                itemsStore
+                    .fetchHistoryItems(id, filterText, 0)
+                    .catch((err) => console.error(`Error fetching items for history ${id}:`, err));
             }
         } catch (e) {
             console.error("Error handling history SSE event:", e);

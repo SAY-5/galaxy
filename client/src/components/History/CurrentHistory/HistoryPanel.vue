@@ -4,6 +4,7 @@ import { storeToRefs } from "pinia";
 import { computed, onMounted, ref, set as VueSet, unref, watch } from "vue";
 
 import { type HistoryItemSummary, type HistorySummaryExtended, userOwnsHistory } from "@/api";
+import { getGalaxyInstance } from "@/app";
 import ExpandedItems from "@/components/History/Content/ExpandedItems";
 import { HistoryFilters } from "@/components/History/HistoryFilters";
 import { deleteContent, updateContentFields } from "@/components/History/model/queries";
@@ -13,6 +14,7 @@ import { useHistoryStore } from "@/stores/historyStore";
 import { useUserStore } from "@/stores/userStore";
 import { type Alias, getOperatorForAlias } from "@/utils/filtering";
 import { setItemDragstart } from "@/utils/setDrag";
+import { refreshHistoryFromPush } from "@/watch/watchHistory";
 
 import { useHistoryDragDrop } from "../../../composables/historyDragDrop";
 
@@ -328,7 +330,11 @@ function updateContentStats() {
 }
 
 function reloadContents() {
-    historyStore.startWatchingHistory();
+    // ``startWatchingHistory`` is idempotent, so the prior call did nothing
+    // once SSE/polling was already initialized. Force a refresh through the
+    // same code path SSE pushes use so the user-initiated click actually
+    // re-fetches the history and items.
+    refreshHistoryFromPush(getGalaxyInstance()).catch((err) => console.error("Manual history refresh failed:", err));
 }
 
 function setInvisible(item: HistoryItemSummary) {

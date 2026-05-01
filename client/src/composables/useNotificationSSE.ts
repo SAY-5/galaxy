@@ -1,4 +1,4 @@
-import { onScopeDispose, ref } from "vue";
+import { onScopeDispose, readonly, ref } from "vue";
 
 import { withPrefix } from "@/utils/redirect";
 
@@ -39,6 +39,10 @@ type Handler = (event: MessageEvent) => void;
 
 let sharedSource: EventSource | null = null;
 const sharedConnected = ref(false);
+// True once the SSE connection has succeeded at least once in this session.
+// Used by UI to distinguish "still connecting" from "was connected, dropped"
+// — only the latter should surface a connection-lost warning.
+const sseEverConnected = ref(false);
 const subscribers: Map<SSEEventType, Set<Handler>> = new Map();
 // Track the per-type dispatchers we registered so ``closeSource`` removes the
 // exact same listeners (``addEventListener`` matches by reference).
@@ -70,6 +74,7 @@ function openSourceIfNeeded() {
 
     sharedSource.onopen = () => {
         sharedConnected.value = true;
+        sseEverConnected.value = true;
         // Global readiness flag so Selenium tests can distinguish a working
         // SSE pipeline from the polling fallback.
         sseGlobals().__galaxy_sse_connected = true;
@@ -189,3 +194,16 @@ export function useSSE(onEvent: Handler, eventTypes: readonly SSEEventType[] = S
  * @deprecated Use `useSSE` instead. This alias exists for backward compatibility.
  */
 export const useNotificationSSE = useSSE;
+
+/**
+ * Read-only handle on the shared SSE connection state. ``connected`` flips
+ * with the EventSource lifecycle; ``hasEverConnected`` latches true on the
+ * first successful open so callers can ignore the initial-connect window
+ * when surfacing a "connection lost" warning.
+ */
+export function useSSEConnectionStatus() {
+    return {
+        connected: readonly(sharedConnected),
+        hasEverConnected: readonly(sseEverConnected),
+    };
+}
